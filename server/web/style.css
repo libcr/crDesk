@@ -1,0 +1,38 @@
+:root {color-scheme:light dark; font-family:system-ui,sans-serif; background:#f4f5f7; color:#22262c}
+body {margin:0; padding:32px 16px} main {max-width:520px; margin:auto; padding:28px; background:#fff; border:1px solid #e1e3e8; border-radius:20px; box-shadow:0 6px 24px #00000008}
+h1 {margin-top:0;font-size:28px} h2 {font-size:16px;margin-top:28px} p {line-height:1.6;overflow-wrap:anywhere} button,input {box-sizing:border-box;font:inherit;border:1px solid #d6d9df;border-radius:10px;padding:11px 16px} button {background:#f0f2f5;color:inherit;cursor:pointer;margin:4px 8px 4px 0} button:hover {background:#e4e7ec} button:disabled {opacity:.5;cursor:default} input {width:100%;background:transparent;color:inherit;margin:10px 0;font-family:monospace;font-size:20px;letter-spacing:4px} label {display:block} ul {list-style:none;padding:0} li {display:flex;align-items:center;gap:12px;padding:8px 0;border-bottom:1px solid #e1e3e8} li span {flex:1;overflow-wrap:anywhere} li button {flex:none} #phone,#registerHint,#addhint,#warning {color:#626872;font-size:14px} #status {color:#375a94} [hidden] {display:none!important}
+@media (prefers-color-scheme:dark) {:root {background:#181a1e;color:#e6e8eb} main {background:#22252b;border-color:#383d46} button {background:#30353d;border-color:#454c58} button:hover {background:#3c4350} input,li {border-color:#454c58} #phone,#registerHint,#addhint,#warning {color:#afb6c1} #status {color:#aac5f0}}
+
+.details {flex:1;min-width:0;overflow-wrap:anywhere} .details strong {display:block} .details small {display:block;line-height:1.6;opacity:.75} .row-actions {display:flex;flex-wrap:wrap;justify-content:flex-end;max-width:45%} .row-actions button {padding:7px 12px;font-size:14px} .section-header {display:flex;align-items:center;justify-content:space-between;gap:12px;margin-top:24px} .section-header h2 {margin:0} #identity {font-weight:600} #loginMethod,#loginMethods {font-size:14px;opacity:.8} button {transition:background .14s,transform .14s} button:active:not(:disabled) {transform:scale(.97)} button:focus-visible,input:focus-visible {outline:2px solid #608bd1;outline-offset:2px}
+@media (max-width:480px) {main {padding:20px} li {align-items:flex-start;flex-direction:column} .row-actions {max-width:100%;justify-content:flex-start}}
+@media (prefers-reduced-motion:reduce) {button {transition:none} button:active:not(:disabled) {transform:none}}
+
+.device-filters {display:flex;gap:8px;align-items:center}.device-filters input {min-width:0;flex:1}.device-filters select {max-width:45%}
+.device-filters input,select,dialog input {font:inherit;letter-spacing:normal;font-size:14px;padding:9px 12px}
+select {background:transparent;color:inherit;border:1px solid #d6d9df;border-radius:10px}
+details {border-top:1px solid #e1e3e8;margin-top:24px;padding-top:16px} summary {font-weight:600;cursor:pointer} details p {font-size:13px;opacity:.8}
+dl {display:grid;grid-template-columns:minmax(100px,1fr) 2fr;gap:12px;font-size:14px} dt {font-weight:600} dd {margin:0;overflow-wrap:anywhere} h3 {font-size:15px}
+dialog {box-sizing:border-box;width:min(480px,calc(100% - 32px));max-height:90vh;overflow:auto;border:1px solid #d6d9df;border-radius:16px;padding:24px;background:#fff;color:inherit}
+dialog::backdrop {background:#0006} dialog h2 {margin-top:0} dialog .row-actions {max-width:none} #metadataError {color:#b3261e}
+@media (prefers-color-scheme:dark) {dialog {background:#22252b;border-color:#454c58} details,select {border-color:#454c58} #metadataError {color:#f2b8b5}}
+
+/* Keep device identity together even when the actions wrap on narrow screens. */
+li.device-row {display:grid;grid-template-columns:36px minmax(0,1fr) auto;align-items:start;gap:12px}
+.device-avatar {display:block;width:36px;height:36px;box-sizing:border-box;border-radius:50%;object-fit:cover;background:#f0f2f5;border:1px solid #e1e3e8}
+.device-heading {display:flex;align-items:center;gap:6px 8px;flex-wrap:wrap;min-width:0}
+.device-heading strong {min-width:0;overflow-wrap:anywhere}
+.device-heading .current-device {flex:0 0 auto;border-radius:999px;padding:2px 8px;border:1px solid #c4d6eb;background:#eaf1fa;color:#285681;font-size:12px;font-weight:500;line-height:1.5;white-space:nowrap}
+.device-row .row-actions {max-width:180px;margin-block-start:-4px}
+@media (max-width:480px) {
+  li.device-row {grid-template-columns:36px minmax(0,1fr);gap:8px 12px}
+  .device-row .row-actions {grid-column:2;max-width:none;justify-content:flex-start;margin-block-start:0}
+}
+@media (prefers-color-scheme:dark) {
+  .device-avatar {background:#30353d;border-color:#454c58}
+  .device-heading .current-device {background:#283b50;color:#bdd9f5;border-color:#435e7b}
+}
+
+.next-step {margin:16px 0;padding:16px;border:1px solid #c4d6eb;border-radius:12px;background:#eef4fb;overflow-wrap:anywhere}
+.next-step h2 {margin:0;font-size:16px}.next-step p {margin:8px 0}.next-step #warning {margin-bottom:0}
+#approve {background:#285681;border-color:#285681;color:#fff}#approve:hover:not(:disabled) {background:#1d4265}
+@media (prefers-color-scheme:dark) {.next-step {background:#283b50;border-color:#435e7b}#approve {background:#bdd9f5;border-color:#bdd9f5;color:#172b40}#approve:hover:not(:disabled) {background:#d5e7fa}}

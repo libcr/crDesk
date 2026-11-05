@@ -1,0 +1,33 @@
+import("//net/features.gni")
+
+assert(is_linux, "crDeskServer currently supports Linux deployment.")
+assert(enable_websockets, "crDeskServer requires WebSocket support.")
+
+# Independent of the desktop target and its UI/capture dependencies.
+executable("crDeskServer") {
+  sources = [
+    "main.cc",
+    "../avatar_format.cc",
+    "../avatar_format.h",
+    "account_auth.cc",
+    "account_auth.h",
+    "account_store.cc",
+    "account_store.h",
+    "../cloud_http.cc",
+    "../cloud_http.h",
+    "server.cc",
+    "server.h",
+    "server_config.cc",
+    "server_config.h",
+  ]
+  deps = [
+    "//base",
+    "//base:i18n",
+    "//crypto",
+    "//net",
+    "//url",
+    "//components/cbor",
+    "//device/fido",
+    "//third_party/sqlite",
+  ]
+}
