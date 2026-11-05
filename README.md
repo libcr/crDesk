@@ -25,6 +25,17 @@ Keep the desktop application open for cloud access.
 - Performance badges showing the active video codec, frame rate, latency, and display path.
 - Optional automatic sharing and login-screen access, depending on the host platform.
 
+## Screenshots
+
+**Device discovery** — the main window on Linux, with local sharing controls,
+discovered LAN devices, and cloud connection status.
+
+![crDesk on Linux showing local sharing controls and LAN and cloud device lists](Screenshot%20From%202026-11-05%2017-58-32.png)
+
+**Remote desktop** — a Windows desktop open in a crDesk tab on Linux.
+
+![crDesk on Linux displaying Windows Settings in a remote desktop tab](Screenshot%20From%202026-11-05%2017-59-30.png)
+
 ## Installation
 
 Use a package that matches your operating system and architecture. Keep the
