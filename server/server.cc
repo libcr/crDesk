@@ -126,19 +126,27 @@ void Server::ReplyHttp(int id, net::HttpServerResponseInfo response) {
 void Server::OnWebSocketRequest(int id, const net::HttpServerRequestInfo& request) {
   auto it = connections_.find(id);
   if (it == connections_.end() || it->second.closing) return;
+  const bool browser = request.path == "/auth/remote/ws";
+  std::string browser_session;
+  if (browser && accounts_ && request.GetHeaderValue("origin") == config_.accounts.origin)
+    browser_session = accounts_->BrowserSessionHash(request);
   std::string decoded_key;
-  if (it->second.websocket || request.method != "GET" || request.path != "/v1/ws" ||
-      !request.peer.address().IsLoopback() || !request.GetHeaderValue("origin").empty() ||
+  if (it->second.websocket || request.method != "GET" || (!browser && request.path != "/v1/ws") ||
+      !request.peer.address().IsLoopback() ||
+      (browser ? browser_session.empty() || !accounts_ || accounts_->BrowserAccount(browser_session).empty()
+               : !request.GetHeaderValue("origin").empty()) ||
       request.GetHeaderValue("sec-websocket-version") != "13" ||
       !base::Base64Decode(request.GetHeaderValue("sec-websocket-key"), &decoded_key) ||
       decoded_key.size() != 16 || !request.data.empty()) {
     Drop(id, "invalid-upgrade");
     return;
   }
-  // Native clients only. No compression negotiation or decompression work.
+  // No compression negotiation or decompression work on either endpoint.
   auto handshake = request;
   handshake.headers.erase("sec-websocket-extensions");
   it->second.websocket = true;
+  it->second.browser = browser;
+  it->second.browser_session = std::move(browser_session);
   it->second.nonce = RandomId();
   auto challenge = Message("challenge");
   challenge.Set("version", 1);
@@ -172,15 +180,40 @@ void Server::OnWebSocketMessage(int id, std::string data) {
     return;
   }
   connection.last_message = now;
-  if (connection.device.empty()) Authenticate(id, *message);
+  if (connection.browser && (!accounts_ || accounts_->BrowserAccount(connection.browser_session).empty())) {
+    Drop(id, "browser-session-expired"); return;
+  }
+  if (connection.device.empty() && connection.browser) AuthenticateBrowser(id, *message);
+  else if (connection.device.empty()) Authenticate(id, *message);
   else HandleMessage(id, *message);
+}
+
+void Server::AuthenticateBrowser(int id, const base::DictValue& message) {
+  auto& connection = connections_.at(id);
+  const auto* ticket = message.FindString("ticket");
+  const auto* type = message.FindString("type");
+  auto account = accounts_ && ticket && type && *type == "authenticate_browser" &&
+      base::TimeTicks::Now() - connection.opened < base::Seconds(10)
+      ? accounts_->ConsumeRemoteTicket(*ticket, connection.browser_session) : std::string();
+  const auto count = std::ranges::count_if(connections_, [&](const auto& entry) {
+    return entry.second.browser && entry.second.browser_account == account;
+  });
+  if (account.empty() || count >= 4) {
+    Error(id, "authentication_failed"); Drop(id, "browser-authentication-failed"); return;
+  }
+  connection.browser_account = std::move(account);
+  connection.device = "web-" + RandomId().substr(0, 32);
+  connection.nonce.clear();
+  Send(id, Message("ready").Set("version", 1).Set("device_id", connection.device)
+      .Set("heartbeat_seconds", 15).Set("idle_timeout_seconds", 45));
 }
 
 void Server::Authenticate(int id, const base::DictValue& message) {
   const auto* device = message.FindString("device_id");
   const auto* proof = message.FindString("proof");
   const auto* type = message.FindString("type");
-  auto configured = device ? Device(*device) : std::nullopt;
+  // Temporary browser identities can never authenticate on the native endpoint.
+  auto configured = device && !device->starts_with("web-") ? Device(*device) : std::nullopt;
   std::vector<uint8_t> signature;
   const auto& connection = connections_.at(id);
   if (!type || *type != "authenticate" || message.FindInt("version") != 1 ||
@@ -257,11 +290,20 @@ void Server::Authenticate(int id, const base::DictValue& message) {
 }
 
 std::optional<DeviceConfig> Server::Device(const std::string& id) {
+  for (const auto& [connection_id, connection] : connections_) {
+    if (connection.browser && !connection.device.empty() && connection.device == id) {
+      DeviceConfig browser; browser.name = "Web browser"; browser.account = connection.browser_account;
+      return browser;
+    }
+  }
   if (accounts_) return accounts_->Device(id);
   auto it = config_.devices.find(id);
   return it == config_.devices.end() ? std::nullopt : std::optional<DeviceConfig>(it->second);
 }
 std::vector<std::string> Server::Peers(const std::string& id) {
+  for (const auto& [connection_id, connection] : connections_)
+    if (accounts_ && connection.browser && !connection.device.empty() && connection.device == id)
+      return accounts_->BrowserDevices(connection.browser_account);
   if (accounts_) return accounts_->Peers(id);
   auto device = Device(id); if (!device) return {};
   return {device->allowed_hosts.begin(), device->allowed_hosts.end()};
@@ -294,6 +336,8 @@ void Server::PublishPresence(const std::string& device) {
   for (const auto& [viewer, id] : online_) {
     if (Allowed(viewer, device)) recipients.push_back(id);
   }
+  for (const auto& [id, connection] : connections_)
+    if (connection.browser && !connection.device.empty() && Allowed(connection.device, device)) recipients.push_back(id);
   // Sending can synchronously close a slow connection. Never keep iterators
   // into connections_, online_, or sessions_ across socket writes.
   for (int id : recipients) {
@@ -305,6 +349,10 @@ void Server::PublishPresence(const std::string& device) {
 
 void Server::HandleMessage(int id, const base::DictValue& message) {
   const std::string type = *message.FindString("type");
+  if (connections_.at(id).browser && type != "ping" && type != "list_devices" &&
+      type != "connect" && type != "signal" && type != "close" && type != "ice_servers" && type != "session_report") {
+    Error(id, "not_allowed"); return;
+  }
   if (type == "ping") {
     Send(id, Message("pong"));
   } else if (type == "list_devices") {
@@ -431,6 +479,10 @@ void Server::Connect(int id, const base::DictValue& message) {
   auto& connection = connections_.at(id);
   if (connection.requests < 1) { Error(id, "rate_limited", *request_id); return; }
   connection.requests -= 1;
+  if (connection.browser && (!Allowed(connection.device, *target) ||
+      message.contains("token_id") || message.contains("token_secret"))) {
+    Error(id, "not_allowed", *request_id); return;
+  }
   const auto* token_id = message.FindString("token_id");
   const auto* token_secret = message.FindString("token_secret");
   bool token_allowed = false;
@@ -726,6 +778,8 @@ void Server::Tick() {
   if (accounts_) accounts_->Tick();
   ProbeDependencies();
   std::vector<int> revoked;
+  if (accounts_) for (const auto& [id, connection] : connections_)
+    if (connection.browser && accounts_->BrowserAccount(connection.browser_session).empty()) revoked.push_back(id);
   if (accounts_) for (const auto& [device, id] : online_) {
     const auto configured = Device(device);
     if (!configured || connections_.at(id).credential_tag != base::HexEncode(crypto::hash::Sha256(configured->secret))) revoked.push_back(id);
@@ -735,6 +789,8 @@ void Server::Tick() {
   if (!revoked.empty() || devices_changed) {
     std::vector<int> viewers;
     for (const auto& [device, id] : online_) viewers.push_back(id);
+    for (const auto& [id, connection] : connections_)
+      if (connection.browser && !connection.device.empty()) viewers.push_back(id);
     for (int id : viewers) if (connections_.contains(id)) HandleMessage(id, Message("list_devices"));
   }
   const auto now = base::TimeTicks::Now();

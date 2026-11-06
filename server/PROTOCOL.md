@@ -454,3 +454,22 @@ They check for a pending update on the heartbeat (15 seconds), so an offline
 change is sent after reconnection. Servers without the feature continue using
 the built-in fallback. Deployment requires rebuilding both crDesk and
 crDeskServer; no database schema migration is required.
+
+## Temporary browser viewers
+
+The native `/v1/ws` handshake above is unchanged. Browser viewers use
+`/auth/remote/ws` on the configured account origin, with the account cookie
+(scoped to `/auth/`) and exact Origin verification. Before opening the socket,
+POST `/auth/remote/ticket` with the account context `flow` and `csrf` to obtain
+`{ticket, expires_in:60}`. The ticket is one-use and bound to that account session.
+After the server's `challenge`, reply with
+`{type:"authenticate_browser", ticket:"..."}`. The `ready` message assigns a
+temporary `web-...` identity. No native-device HMAC credential is issued.
+
+The supported messages are `ping`, `list_devices`, `connect`, `signal`, `close`,
+`ice_servers`, and `session_report`, with the existing message formats. Only
+same-account hosts are allowed; browser `connect` cannot redeem access tokens.
+These identities are not advertised as devices and cannot authenticate through
+the native endpoint. Account session revocation/expiry closes their sockets and
+associated sessions. See [BROWSER.md](BROWSER.md) for host authentication, file
+protocol behavior, deployment and browser limitations.

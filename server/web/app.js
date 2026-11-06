@@ -286,6 +286,12 @@
         await api('account/remove', {kind, id:row.id}); await refreshRecords(); say('removed');
       });
       if (kind === 'device') {
+        if (!row.current) {
+          const connect = document.createElement('button'); connect.textContent = text.remoteBrowserAccess;
+          connect.setAttribute('aria-label', text.remoteBrowserAccess + ': ' + name);
+          connect.onclick = () => window.open('/auth/remote.html?device=' + encodeURIComponent(row.id), '_blank', 'noopener');
+          actions.append(connect);
+        }
         const edit = document.createElement('button'); edit.textContent = text.editDetails;
         edit.setAttribute('aria-label', text.editDetails + ': ' + name);
         edit.onclick = () => run(() => editMetadata(row)); actions.append(edit);

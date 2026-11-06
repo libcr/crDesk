@@ -29,6 +29,8 @@ class Server final : public net::HttpServer::Delegate {
  private:
   struct Connection {
     bool websocket = false;
+    bool browser = false;
+    std::string browser_session, browser_account;
     bool sharing = false;
     bool closing = false;
     std::string nonce;
@@ -65,6 +67,7 @@ class Server final : public net::HttpServer::Delegate {
   void OnWebSocketRequest(int id, const net::HttpServerRequestInfo& request) override;
   void OnWebSocketMessage(int id, std::string data) override;
   void OnClose(int id) override;
+  void AuthenticateBrowser(int id, const base::DictValue& message);
   void Authenticate(int id, const base::DictValue& message);
   void HandleMessage(int id, const base::DictValue& message);
   void Connect(int id, const base::DictValue& message);

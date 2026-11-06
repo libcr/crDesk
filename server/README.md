@@ -15,6 +15,8 @@ Optional [Google sign-in and passkeys](ACCOUNTS.md) enroll devices into accounts
 with a private SQLite database. Devices in the same account can discover one
 another; remote desktop access still requires the host's existing authorization.
 See that guide for the browser login page, OAuth setup and deployment steps.
+[Browser remote desktop](BROWSER.md) adds same-account control and bidirectional
+file transfer from the device list, using the host’s existing authorization.
 
 ## Architecture
 
@@ -30,8 +32,9 @@ crDesk A <========== WebRTC / ICE ==========> crDesk B
 Nginx handles TLS and certificates. crDeskServer listens **only on IPv4 loopback**;
 the proxy must run in the same network namespace. Do not expose port 9080 or
 change it to a public address. Native clients must verify the WSS certificate
-and send no `Origin` header; browser-origin upgrades are rejected. The server
-does not use proxy headers as device identity.
+and send no `Origin` header on `/v1/ws`. Browser viewers use a separate
+`/auth/remote/ws` endpoint with an exact Origin check, account cookie and one-use
+ticket. The server does not use proxy headers as device identity.
 
 Signaling is JSON over WebSocket/TCP. Media, input and file transfers belong on
 WebRTC, not on this WebSocket. ICE determines direct connectivity; this service

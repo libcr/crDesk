@@ -103,6 +103,7 @@ AccountAuth::~AccountAuth() = default;
 bool AccountAuth::Start() { return store_.Open(config_.database); }
 void AccountAuth::Tick() {
   const auto now = base::TimeTicks::Now();
+  std::erase_if(remote_tickets_, [&](const auto& item) { return item.second.expires <= now; });
   if (last_prune_.is_null() || now - last_prune_ >= base::Hours(1)) {
     store_.PruneEvents(); store_.PruneBrowserSessions(); last_prune_ = now;
   }
@@ -246,6 +247,24 @@ AccountAuth::Flow* AccountAuth::BrowserFlow(const net::HttpServerRequestInfo& re
     return &flow;
   }
   return nullptr;
+}
+std::string AccountAuth::BrowserAccount(const std::string& session_hash) {
+  const auto session = store_.BrowserSession(session_hash);
+  return session ? Field(*session, "account") : std::string();
+}
+std::string AccountAuth::ConsumeRemoteTicket(const std::string& ticket, const std::string& session_hash) {
+  if (ticket.size() != 43 || session_hash.empty()) return {};
+  auto it = remote_tickets_.find(Encode(Digest(ticket)));
+  if (it == remote_tickets_.end() || it->second.expires <= base::TimeTicks::Now() ||
+      it->second.session_hash != session_hash) return {};
+  remote_tickets_.erase(it);
+  return BrowserAccount(session_hash);
+}
+std::vector<std::string> AccountAuth::BrowserDevices(const std::string& account) {
+  std::vector<std::string> result;
+  if (!account.empty()) for (const auto& item : store_.List("device", account))
+    result.push_back(Field(item.GetDict(), "id"));
+  return result;
 }
 void AccountAuth::Handle(const net::HttpServerRequestInfo& request, Reply reply) {
   Tick();
@@ -449,6 +468,15 @@ void AccountAuth::Handle(const net::HttpServerRequestInfo& request, Reply reply)
     Json(std::move(reply), base::DictValue().Set("email", flow->email).Set("signed_in", true), net::HTTP_OK, account_cookie.empty() ? std::string() : flow->cookie, false, account_cookie); return;
   }
   if (flow->account.empty()) { Error(std::move(reply), "sign_in_required", net::HTTP_UNAUTHORIZED); return; }
+  if (path == "/auth/remote/ticket") {
+    if (!AllowStart(false) || remote_tickets_.size() >= 128) {
+      Error(std::move(reply), "rate_limited", net::HTTP_TOO_MANY_REQUESTS); return;
+    }
+    const auto ticket = Random();
+    remote_tickets_.emplace(Encode(Digest(ticket)), RemoteTicket{
+        flow->session_hash, base::TimeTicks::Now() + base::Seconds(60)});
+    Json(std::move(reply), base::DictValue().Set("ticket", ticket).Set("expires_in", 60)); return;
+  }
   if (path == "/auth/device/approve") {
     if (flow->management || !flow->identity_verified || flow->revoked) { Error(std::move(reply), "invalid_request"); return; }
     if (!flow->approved) {

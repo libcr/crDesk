@@ -24,6 +24,11 @@ class AccountAuth {
   bool Start();
   void Handle(const net::HttpServerRequestInfo& request, Reply reply);
   void Tick();
+  // Browser viewers are temporary identities, never enrolled device secrets.
+  std::string BrowserSessionHash(const net::HttpServerRequestInfo& request) const;
+  std::string BrowserAccount(const std::string& session_hash);
+  std::string ConsumeRemoteTicket(const std::string& ticket, const std::string& session_hash);
+  std::vector<std::string> BrowserDevices(const std::string& account);
   std::optional<DeviceConfig> Device(const std::string& id);
   std::vector<std::string> Peers(const std::string& device);
   void SetOnline(const std::string& device, bool online, std::string platform = {});
@@ -61,7 +66,6 @@ class AccountAuth {
   base::DictValue PasskeyOptions(Flow&, const std::string& operation);
   bool PasskeyFinish(Flow&, const base::DictValue&, const std::string& operation);
   Flow* BrowserFlow(const net::HttpServerRequestInfo& request, const std::string& id = {});
-  std::string BrowserSessionHash(const net::HttpServerRequestInfo& request) const;
   std::string RememberBrowser(Flow& flow);
   bool AllowStart(bool new_flow = true);
   bool HasGoogleLogin(const std::string& account);
@@ -69,6 +73,11 @@ class AccountAuth {
   void RestoreDevice(Flow& flow);
   void LoginFailure(Flow& flow, std::string reason);
   void FlushLoginFailures(Flow& flow);
+  struct RemoteTicket {
+    std::string session_hash;
+    base::TimeTicks expires;
+  };
+  std::map<std::string, RemoteTicket> remote_tickets_;
   AccountConfig config_;
   AccountStore store_;
   std::map<std::string, Flow> flows_;
