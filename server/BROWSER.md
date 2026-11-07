@@ -27,6 +27,23 @@ request there when required by its existing access policy.
   To send to the browser, use the sharing computer's existing file-send UI.
   After reception and verification, click **Save file** in the browser.
 
+When the host sends a separate cursor, the browser draws it at the local pointer
+position immediately and reconciles it with host feedback. Prediction ends on
+blur, leaving the video, loss of control, or after a bounded quiet period so local
+mouse activity on the sharing computer can take over. Embedded video cursors do
+not use prediction.
+
+The optional `cursor_motion` capability keeps cursor shapes/state on the reliable
+input channel and sends position-only `cursor` messages on `crdesk-motion-v1`.
+`cursor_sequence` orders updates; `cursor_shape_sequence` associates positions
+with a reliable shape/state version. Both are uint64 decimal strings, scoped by
+the input `epoch`. Receivers discard stale updates and retain only the newest
+position awaiting a shape. The host retains one pending position under congestion
+and refreshes stationary positions once a second to recover from packet loss.
+Peers without this capability continue using reliable cursor updates. This
+optimization requires updated native peers/browser resources; no server binary
+or public-port change is needed.
+
 File contents stay on the WebRTC connection (direct or via coturn), not the
 account server. The browser allows one transfer at a time and **64 MiB per file**.
 It uses memory and Blob downloads, so peak memory can exceed the file size.

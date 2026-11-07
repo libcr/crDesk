@@ -7,12 +7,20 @@ const t = key => text[key] || text.remoteFailed || key;
 const busyFile = phase => ['remotePreparing', 'remoteOffered', 'remoteTransferring', 'remoteVerifying'].includes(phase);
 const status = key => { $('status').textContent = t(key); };
 let toolbarTimer = 0, toolbarHovered = false;
+let targetDevice = null, avatarUrl = '', pageClosing = false;
 function labelControl(element, key) {
   element.setAttribute('aria-label', t(key)); element.title = t(key);
 }
 function toolbarIcon(id, name, label) {
   $(id).querySelector('use').setAttribute('href', '#icon-' + name);
   labelControl($(id), label);
+}
+function updateDesktopCursor() {
+  const video = $('desktop');
+  const connected = active?.pc?.connectionState === 'connected' &&
+    active?.control?.readyState === 'open' && !active?.capabilities?.paused &&
+    !!video.srcObject && video.readyState >= HTMLMediaElement.HAVE_CURRENT_DATA;
+  video.classList.toggle('remote-connected', connected);
 }
 function scheduleToolbarHide() {
   clearTimeout(toolbarTimer);
@@ -137,6 +145,26 @@ async function api(path, body = {}) {
   if (!response.ok || result.error) throw Error(result.error || 'remoteFailed');
   return result;
 }
+async function showDeviceAvatar(device) {
+  const image = $('deviceAvatar');
+  const index = Number.isInteger(device.avatar) && device.avatar >= 0 && device.avatar <= 8 ? device.avatar : 0;
+  const fallback = '/auth/avatars/' + index + '.png';
+  image.onerror = () => { image.onerror = null; image.src = fallback; };
+  image.src = fallback; image.hidden = false;
+  image.classList.toggle('offline', !device.online);
+  const hash = device.avatar_hash;
+  if (!/^[a-f0-9]{64}$/.test(hash || '')) return;
+  try {
+    const result = await api('account/avatar', {id:device.id, hash});
+    if (pageClosing || result.hash !== hash || typeof result.data !== 'string' || result.data.length > 32768 ||
+        !/^[A-Za-z0-9+/]*={0,2}$/.test(result.data)) return;
+    const bytes = Uint8Array.from(atob(result.data), c => c.charCodeAt(0));
+    if (bytes.length < 4 || bytes.length > 24576 || bytes[0] !== 255 || bytes[1] !== 216) return;
+    if (avatarUrl) URL.revokeObjectURL(avatarUrl);
+    avatarUrl = URL.createObjectURL(new Blob([bytes], {type:'image/jpeg'}));
+    image.src = avatarUrl;
+  } catch { /* Keep the built-in avatar if the custom image is unavailable. */ }
+}
 async function context() {
   const result = await api('browser/start', {flow:'', management:true});
   if (!result.signed_in || (account && account !== result.account)) throw Error('sign_in_required');
@@ -205,9 +233,10 @@ function stop(reason = 'remoteClosed') {
   for (const audio of s.audio) { audio.pause(); audio.srcObject = null; }
   toolbarIcon('sound', 'mute', 'remoteSound'); $('sound').setAttribute('aria-pressed', 'false');
   $('desktop').srcObject = null; $('stats').textContent = '';
+  updateDesktopCursor();
   closeToolbarMenus(); showToolbar();
   for (const id of ['disconnect','fullscreen','sendKey','sound','resolution','upload']) $(id).disabled = true;
-  $('device').disabled = false; $('secret').disabled = !$('device').value;
+  $('secret').disabled = !targetDevice?.online;
   renderKey();
   navigator.keyboard?.unlock?.();
   status(reason);
@@ -226,6 +255,7 @@ function inputSend(s, value) {
   try { channel.send(JSON.stringify(value)); } catch { stop('remoteFailed'); }
 }
 function capabilities(s) {
+  updateDesktopCursor();
   s.input.configure(s.capabilities, !!(s.permissions & 1));
   $('sendKey').disabled = !s.input.enabled;
   for (const button of $('keyMenu').children)
@@ -282,6 +312,7 @@ function makePeer(s, servers) {
   };
   s.pc.onconnectionstatechange = () => {
     if (active !== s) return;
+    updateDesktopCursor();
     if (s.pc.connectionState === 'failed') stop('remoteFailed');
     else if (s.pc.connectionState === 'disconnected') status('remoteInterrupted');
     else if (s.pc.connectionState === 'connected') capabilities(s);
@@ -313,8 +344,18 @@ function makePeer(s, servers) {
       };
       c.onclose = () => { if (active === s) stop('remoteClosed'); };
       if (c.readyState === 'open') c.onopen();
-    } else if (c.label === 'crdesk-motion-v1' && !s.motion) s.motion = c;
-    else if (c.label === 'crdesk-files-v1' && !s.files) {
+    } else if (c.label === 'crdesk-motion-v1' && !s.motion) {
+      s.motion = c;
+      c.onmessage = e => {
+        if (active !== s || typeof e.data !== 'string' || e.data.length > 4096 ||
+            !s.protocol.features?.includes('cursor_motion')) return;
+        try {
+          const m = JSON.parse(e.data);
+          if (m.kind === 'cursor' && m.cursor_position_only === true && m.width === undefined && m.pixels === undefined)
+            s.input.cursor(m);
+        } catch { /* Discard malformed unordered updates. */ }
+      };
+    } else if (c.label === 'crdesk-files-v1' && !s.files) {
       s.fileChannel = c; s.files = new RemoteFiles(c, transfer, download);
       const closed = c.onclose; c.onclose = () => { closed(); if (active === s) capabilities(s); };
       c.onopen = () => { if (active === s) capabilities(s); };
@@ -379,16 +420,16 @@ async function socketMessage(s, data) {
 }
 async function connect(event) {
   event?.preventDefault(); if (active || preparing || $('secret').disabled) return;
-  const target = $('device').value, secret = $('secret').value;
+  const target = targetDevice?.id, secret = $('secret').value;
   if (!target || !/^[0-9]{9}$/.test(secret)) { status('remoteKeyHint'); return; }
-  preparing = true; $('secret').disabled = true; $('device').disabled = true;
+  preparing = true; $('secret').disabled = true;
   renderKey(); status('remoteConnecting');
   try {
     await context(); const {ticket} = await api('remote/ticket');
     const url = new URL('/auth/remote/ws', location.href); url.protocol = 'wss:';
     const s = {ws:new WebSocket(url), ticket, secret, target, request:random(16), id:'', candidates:[], permissions:0,
       capabilities:{}, audio:[], sound:false, lastMessage:Date.now(), pending:0, chain:Promise.resolve()};
-    active = s; $('secret').value = ''; $('secret').disabled = true; $('device').disabled = true; $('disconnect').disabled = false;
+    active = s; $('secret').value = ''; $('secret').disabled = true; $('disconnect').disabled = false;
     renderKey();
     s.input = new RemoteInput($('desktop'), $('cursor'), value => inputSend(s, value));
     s.ws.onmessage = event => {
@@ -410,11 +451,13 @@ async function connect(event) {
   }
   finally {
     preparing = false;
-    if (!active) { $('device').disabled = false; $('secret').disabled = !$('device').value; renderKey(); }
+    if (!active) { $('secret').disabled = !targetDevice?.online; renderKey(); }
   }
 }
 async function start() {
   setupKey();
+  for (const event of ['loadeddata', 'playing', 'emptied'])
+    $('desktop').addEventListener(event, updateDesktopCursor);
   const all = await (await fetch('/auth/i18n.json', {cache:'no-store'})).json();
   let language = 'en';
   for (const preference of navigator.languages || [navigator.language]) {
@@ -431,11 +474,6 @@ async function start() {
   setupToolbar();
   setupTransferPopup();
   $('connectForm').addEventListener('submit', connect);
-  $('device').addEventListener('change', () => {
-    if (active || preparing) return;
-    $('secret').disabled = !$('device').value;
-    if ($('secret').value.length === 9) connect();
-  });
   $('disconnect').onclick = () => stop();
   $('sound').onclick = async () => {
     const s = active; if (!s) return; s.sound = !s.sound;
@@ -460,17 +498,22 @@ async function start() {
   });
   $('upload').onchange = () => { const file = $('upload').files[0]; $('upload').value = ''; if (file) active?.files?.upload(file); };
   $('accept').onclick = () => active?.files?.accept(); $('cancel').onclick = () => active?.files?.cancel();
-  window.addEventListener('pagehide', () => { stop(); if (downloadUrl) URL.revokeObjectURL(downloadUrl); });
+  window.addEventListener('pagehide', () => {
+    pageClosing = true; stop();
+    if (downloadUrl) URL.revokeObjectURL(downloadUrl);
+    if (avatarUrl) URL.revokeObjectURL(avatarUrl);
+  });
   if (!isSecureContext || !window.RTCPeerConnection || !crypto.subtle) { status('remoteUnsupported'); return; }
   try {
     await context(); const records = await api('account/list');
     const target = new URL(location.href).searchParams.get('device');
-    for (const device of records.devices) {
-      const option = document.createElement('option'); option.value = device.id;
-      option.textContent = device.name + (device.online ? '' : ' · ' + text.offline); option.selected = device.id === target;
-      $('device').append(option);
-    }
-    $('secret').disabled = !records.devices.length; status(records.devices.length ? 'remoteKeyHint' : 'empty');
+    targetDevice = records.devices.find(device => device.id === target) || null;
+    $('device').textContent = targetDevice?.name || targetDevice?.id || '';
+    $('device').title = $('device').textContent;
+    $('device').hidden = !targetDevice;
+    if (targetDevice) void showDeviceAvatar(targetDevice);
+    $('secret').disabled = !targetDevice?.online;
+    status(targetDevice?.online ? 'remoteKeyHint' : 'remote_unavailable');
   } catch (error) {
     $('login').hidden = false;
     status(['sign_in_required','expired'].includes(error.message) ? 'remoteSignIn' : 'remoteFailed');

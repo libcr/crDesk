@@ -1,14 +1,13 @@
 <!doctype html>
 <html lang="en">
 <head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>crDesk</title><link rel="stylesheet" href="/auth/style.css"><script src="/auth/app.js" defer></script></head>
-<body><main><h1>crDesk</h1><p id="intro"></p><p id="device"></p><p id="status" role="status" aria-live="polite"></p>
+<body><main><header class="page-header"><div class="account-brand"><h1>crDesk</h1><button id="serverStatusButton" type="button" aria-label="Server status" title="Server status" aria-expanded="false" aria-controls="serverPanel" data-state="idle"><span aria-hidden="true"></span></button><div id="serverPanel" role="region" aria-labelledby="serverTitle" hidden><div class="server-panel-content"><h2 id="serverTitle"></h2><p id="serverLoadStatus" role="status" aria-live="polite"></p><div id="serverDetails" hidden><p id="serverHint"></p><dl id="serverStatus"></dl><h3 id="diagnosticsTitle"></h3><p id="diagnosticsHint"></p><ul id="diagnostics"></ul></div></div></div></div><button id="logout" hidden></button></header><p id="intro"></p><p id="device"></p><div class="account-identity"><p id="identity" hidden></p><p id="status" role="status" aria-live="polite"></p></div>
 <section id="login" hidden><button id="google"></button><button id="passkey"></button><button id="phoneAction"></button><p id="phone"></p><button id="registerPhone"></button><p id="registerHint"></p></section>
 <button id="restart" hidden></button><p id="nativeRestartHint" class="next-step" role="status" hidden></p>
-<section id="account" hidden><p id="identity"></p><section id="nextStep" class="next-step" aria-labelledby="nextStepTitle" hidden><h2 id="nextStepTitle"></h2><p id="nextStepText" role="status" aria-live="polite"></p>
+<section id="account" hidden><section id="nextStep" class="next-step" aria-labelledby="nextStepTitle" hidden><h2 id="nextStepTitle"></h2><p id="nextStepText" role="status" aria-live="polite"></p>
 <div id="approval"><button id="approve"></button><p id="warning"></p></div></section>
-<p id="loginMethod"></p><p id="loginMethods"></p><button id="logout"></button><button id="add"></button><button id="addPhone"></button><p id="addhint"></p>
-<div class="section-header"><h2 id="devicesTitle"></h2><button id="refresh"></button></div><div class="device-filters"><input id="deviceSearch" type="search"><select id="groupFilter"></select></div><ul id="devices"></ul><h2 id="keysTitle"></h2><ul id="keys"></ul>
-<details id="serverPanel"><summary id="serverTitle"></summary><p id="serverHint"></p><dl id="serverStatus"></dl><h3 id="diagnosticsTitle"></h3><p id="diagnosticsHint"></p><ul id="diagnostics"></ul></details>
+<p id="loginMethod"></p><p id="loginMethods"></p><button id="add"></button><button id="addPhone"></button><p id="addhint"></p>
+<div class="section-header"><button id="refresh" type="button" aria-label="Refresh" title="Refresh"><svg viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M20 11a8 8 0 1 0-2.34 6.66M20 4v7h-7" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg></button><h2 id="devicesTitle"></h2><div class="device-filters"><input id="deviceSearch" type="search"><select id="groupFilter"></select></div></div><ul id="devices"></ul><h2 id="keysTitle"></h2><ul id="keys"></ul>
 <details id="historyPanel"><summary id="historyTitle"></summary><p id="historyHint"></p><ul id="history"></ul></details>
 </section>
 <dialog id="metadataDialog"><form id="metadataForm"><h2 id="metadataTitle"></h2>

@@ -18,6 +18,9 @@ dialog::backdrop {background:#0006} dialog h2 {margin-top:0} dialog .row-actions
 
 /* Keep device identity together even when the actions wrap on narrow screens. */
 li.device-row {display:grid;grid-template-columns:36px minmax(0,1fr) auto;align-items:start;gap:12px}
+.device-avatar-column {display:flex;flex-direction:column;align-items:center;align-self:stretch;gap:8px}
+.device-browser-access {display:inline-flex;align-items:center;justify-content:center;width:36px;height:36px;padding:3px;margin: auto 0 0;border-radius:50%}
+.device-browser-access svg {width:100%;height:100%;fill:currentColor;flex:none}
 .device-avatar {display:block;width:36px;height:36px;box-sizing:border-box;border-radius:50%;object-fit:cover;background:#f0f2f5;border:1px solid #e1e3e8}
 .device-heading {display:flex;align-items:center;gap:6px 8px;flex-wrap:wrap;min-width:0}
 .device-heading strong {min-width:0;overflow-wrap:anywhere}
@@ -25,6 +28,7 @@ li.device-row {display:grid;grid-template-columns:36px minmax(0,1fr) auto;align-
 .device-row .row-actions {max-width:180px;margin-block-start:-4px}
 @media (max-width:480px) {
   li.device-row {grid-template-columns:36px minmax(0,1fr);gap:8px 12px}
+  .device-avatar-column {grid-row:1 / span 2}
   .device-row .row-actions {grid-column:2;max-width:none;justify-content:flex-start;margin-block-start:0}
 }
 @media (prefers-color-scheme:dark) {
@@ -36,3 +40,56 @@ li.device-row {display:grid;grid-template-columns:36px minmax(0,1fr) auto;align-
 .next-step h2 {margin:0;font-size:16px}.next-step p {margin:8px 0}.next-step #warning {margin-bottom:0}
 #approve {background:#285681;border-color:#285681;color:#fff}#approve:hover:not(:disabled) {background:#1d4265}
 @media (prefers-color-scheme:dark) {.next-step {background:#283b50;border-color:#435e7b}#approve {background:#bdd9f5;border-color:#bdd9f5;color:#172b40}#approve:hover:not(:disabled) {background:#d5e7fa}}
+
+/* Keep sign-in compact; account management uses the available page width. */
+main:has(#account:not([hidden])) {box-sizing:border-box;width:100%;max-width:none}
+.page-header {display:flex;align-items:center;justify-content:space-between;gap:12px}
+.page-header h1 {margin:0}.page-header #logout {margin:0;flex:none}
+.section-header {justify-content:flex-start;flex-wrap:wrap}
+.section-header h2 {flex:none}
+.section-header .device-filters {flex:1 1 260px;max-width:520px;min-width:0;gap:12px}
+.section-header .device-filters input {margin:0}
+.section-header #refresh {display:inline-flex;align-items:center;justify-content:center;flex:none;width:36px;height:36px;padding:8px;margin:0;border:0;border-radius:50%;background:transparent}
+.section-header #refresh svg {width:20px;height:20px;flex:none}
+.section-header #refresh:hover:not(:disabled) {background:#e4e7ec}
+@media (prefers-color-scheme:dark) {.section-header #refresh:hover:not(:disabled) {background:#3c4350}}
+@media (max-width:480px) {
+  .section-header .device-filters {flex-basis:100%;order:1}
+  .page-header {align-items:flex-start;flex-wrap:wrap}
+}
+
+.device-avatar,.device-browser-access {transition:filter .15s,opacity .15s,background .14s,transform .14s}
+.device-row.offline .device-avatar {filter:grayscale(1);opacity:.55}
+.device-row.offline .device-browser-access {filter:grayscale(1);opacity:.35}
+.device-browser-access:disabled:hover {background:#f0f2f5;transform:none}
+@media (prefers-color-scheme:dark) {.device-browser-access:disabled:hover {background:#30353d}}
+@media (prefers-reduced-motion:reduce) {.device-avatar,.device-browser-access {transition:none}}
+
+.account-brand{position:relative;display:flex;align-items:flex-end;flex:none}
+#serverStatusButton{display:inline-flex;align-items:center;justify-content:center;flex:none;width:24px;height:24px;padding:8px;margin:0 0 0 2px;border:0;border-radius:50%;background:transparent}
+#serverStatusButton:hover,#serverStatusButton[aria-expanded=true]{background:#e4e7ec}
+#serverStatusButton>span{display:block;flex:none;width:8px;height:8px;border-radius:50%;background:#747b83;transition:background .15s}
+#serverStatusButton[data-state=ready]>span{background:#188038}
+#serverStatusButton[data-state=loading]>span{background:#1a73e8;animation:server-pulse 1.4s ease-in-out infinite}
+#serverStatusButton[data-state=warning]>span{background:#b06000}
+#serverPanel{box-sizing:border-box;position:absolute;z-index:8;top:calc(100% + 10px);inset-inline-start:0;width:min(480px,calc(100vw - 96px));border:1px solid #d6d9df;border-radius:12px;background:#fff;box-shadow:0 4px 20px #0003}
+#serverPanel::before{content:"";position:absolute;top:-7px;left:var(--server-arrow,110px);width:12px;height:12px;transform:translateX(-50%) rotate(45deg);background:inherit;border-top:1px solid #d6d9df;border-left:1px solid #d6d9df}
+.server-panel-content{padding:16px;max-height:min(65vh,600px);overflow:auto;overflow-wrap:anywhere}
+#serverPanel h2{margin:0;font-size:16px}#serverPanel p{font-size:13px;line-height:1.6}
+#serverLoadStatus:empty{display:none}#serverPanel #serverHint,#serverPanel #diagnosticsHint{opacity:.8}
+#serverPanel dl{grid-template-columns:minmax(0,1fr) minmax(0,2fr)}
+@keyframes server-pulse{0%,100%{opacity:1}50%{opacity:.4}}
+@media(prefers-color-scheme:dark){
+  #serverStatusButton:hover,#serverStatusButton[aria-expanded=true]{background:#3c4350}
+  #serverStatusButton>span{background:#a8b0b8}
+  #serverStatusButton[data-state=ready]>span{background:#81c995}
+  #serverStatusButton[data-state=loading]>span{background:#8ab4f8}
+  #serverStatusButton[data-state=warning]>span{background:#ffb74d}
+  #serverPanel{background:#22252b;border-color:#454c58}#serverPanel::before{border-color:#454c58}
+}
+@media(prefers-reduced-motion:reduce){#serverStatusButton>span{transition:none}#serverStatusButton[data-state=loading]>span{animation:none}}
+
+.account-identity{display:flex;align-items:baseline;flex-wrap:wrap;gap:4px 12px;margin:16px 0}
+.account-identity>p{margin:0;min-width:0;max-width:100%}
+.account-identity #status:empty{display:none}
+.account-identity:has(#identity[hidden]):has(#status:empty){display:none}

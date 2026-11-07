@@ -4,7 +4,7 @@
   let flow = new URL(location.href).searchParams.get('flow');
   const currentDevice = new URL(location.href).searchParams.get('device') || '';
   let signedIn = false, management = !flow, accountId = '';
-  let recovering = null;
+  let recovering = null, serverChecked = false;
   // Until the server identifies a flow, never discard it to start management.
   let enrollmentFlow = Boolean(flow) && new URL(location.href).searchParams.get('context') !== 'management';
   let awaitingNative = false;
@@ -13,12 +13,49 @@
   let avatarAbort = null;
   let text = {}, csrf = '', busy = false, recordsCache = null, editingDevice = null;
   const say = key => { $('status').textContent = text[key] || text.error || key; };
+  function resetServerStatus() {
+    serverChecked = false;
+    $('serverStatusButton').dataset.state = 'idle';
+    $('serverDetails').hidden = true;
+    $('serverStatus').replaceChildren(); $('diagnostics').replaceChildren();
+    $('serverLoadStatus').textContent = text.remoteSignIn || 'Sign in';
+  }
+  function setupServerStatus() {
+    const button = $('serverStatusButton'), panel = $('serverPanel');
+    const close = (restoreFocus = false) => {
+      panel.hidden = true; button.setAttribute('aria-expanded', 'false');
+      if (restoreFocus) button.focus({preventScroll:true});
+    };
+    const positionArrow = () => {
+      if (panel.hidden) return;
+      const anchor = button.getBoundingClientRect(), bounds = panel.getBoundingClientRect();
+      panel.style.setProperty('--server-arrow', (anchor.left + anchor.width / 2 - bounds.left) + 'px');
+    };
+    window.addEventListener('resize', positionArrow);
+    button.onclick = () => {
+      if (!panel.hidden) { close(); return; }
+      panel.hidden = false; button.setAttribute('aria-expanded', 'true');
+      positionArrow();
+      if (signedIn) refreshQuietly(refreshServerStatus);
+      else resetServerStatus();
+    };
+    document.addEventListener('pointerdown', event => {
+      if (!button.parentElement.contains(event.target)) close();
+    });
+    document.addEventListener('keydown', event => {
+      if (event.key !== 'Escape' || panel.hidden) return;
+      event.preventDefault(); close(true);
+    });
+    document.addEventListener('focusin', event => {
+      if (!button.parentElement.contains(event.target)) close();
+    });
+  }
   function failed(error) {
     say(error.name === 'NotAllowedError' ? 'cancelled' : (text[error.message] ? error.message : 'error'));
     if (error.message === 'expired' || error.message === 'already_open' || error.message === 'device_revoked') {
       awaitingNative = false;
       clearAvatars(); recordsCache = null; $('devices').replaceChildren();
-      signedIn = false; $('account').hidden = true; $('login').hidden = true;
+      signedIn = false; resetServerStatus(); $('account').hidden = true; $('identity').hidden = true; $('logout').hidden = true; $('login').hidden = true;
       $('restart').hidden = enrollmentFlow;
       $('nativeRestartHint').hidden = !enrollmentFlow;
     }
@@ -56,12 +93,12 @@
     if (!background && backgroundTask) await backgroundTask;
     if (busy) return;
     busy = true;
-    if (!background) document.querySelectorAll('button').forEach(b => { b.disabled = true; });
+    if (!background) document.querySelectorAll('button:not(#serverStatusButton)').forEach(b => { b.disabled = true; });
     try { await callback(); }
     catch (error) { failed(error); }
     finally {
       busy = false;
-      if (!background) document.querySelectorAll('button').forEach(b => { b.disabled = b.dataset.locked === 'true'; });
+      if (!background) document.querySelectorAll('button:not(#serverStatusButton)').forEach(b => { b.disabled = b.dataset.locked === 'true'; });
     }
   }
   function refreshQuietly(callback) {
@@ -80,6 +117,7 @@
   }
   function applyState(state) {
     if (accountId && accountId !== (state.account || '')) {
+      resetServerStatus();
       clearAvatars(); recordsCache = null; editingDevice = null;
       $('devices').replaceChildren(); $('keys').replaceChildren();
       $('metadataDialog').close();
@@ -97,7 +135,7 @@
     $('intro').textContent = management ? text.manageIntro : text.intro;
     $('device').hidden = management;
     $('device').textContent = text.device + ': ' + state.name;
-    $('login').hidden = signedIn; $('account').hidden = !signedIn;
+    $('login').hidden = signedIn; $('account').hidden = !signedIn; $('identity').hidden = !signedIn; $('logout').hidden = !signedIn;
     $('google').hidden = !state.google; $('restart').hidden = true; $('nativeRestartHint').hidden = true;
     if (signedIn) {
       $('identity').textContent = state.email || state.account;
@@ -191,37 +229,54 @@
       term.textContent = name; description.textContent = value; $(target).append(term, description);
     }
   }
-  async function refreshPanels() {
-    if ($('serverPanel').open) {
-      const state = await api('account/status');
-      const entries = [[text.revision,state.revision], [text.uptime,new Intl.NumberFormat(document.documentElement.lang, {style:'unit', unit:'minute', unitDisplay:'short'}).format(Math.floor(state.uptime / 60))],
-        [text.onlineDevices,state.online], [text.signalingSessions,state.sessions],
-        ['STUN',state.stun ? text.configured : text.unknown], ['TURN',state.turn.join(', ') || text.unknown]];
-      for (const key of ['https','google']) {
-        const probe = state.dependencies[key];
-        const title = key === 'https' ? 'HTTPS / TLS' : text.googleKeys;
-        entries.push([title,probe ? (probe.ok ? text.passed : text.failed) + ' · ' + when(probe.time) +
-          (probe.ok ? '' : ' · net=' + probe.net_error + ' HTTP=' + probe.http_status) : text.unknown]);
-        if (probe && probe.certificate_expiry) entries.push([title + ' · ' + text.certificateExpiry,when(probe.certificate_expiry)]);
-      }
-      detailList('serverStatus', entries);
-      $('diagnostics').replaceChildren();
-      if (!state.diagnostics.length) { const li = document.createElement('li'); li.textContent = text.empty; $('diagnostics').append(li); }
-      for (const report of state.diagnostics) {
-        const li = document.createElement('li'), details = document.createElement('div'); details.className = 'details';
-        const title = document.createElement('strong'); title.textContent = report.name + ' · ' + when(report.time); details.append(title);
-        for (const row of report.results) {
-          const line = document.createElement('small');
-          const stages = {cloud:'Cloud TLS',discovery:text.devicesTitle,ice_config:'ICE',stun:'STUN',turn_udp:'TURN UDP',turn_tcp:'TURN TCP',turn_tls:'TURN TLS'};
-          line.textContent = (stages[row.stage] || row.stage) + (Number.isInteger(row.probe) ? ' #' + (row.probe + 1) : '') + ': ' +
-            (row.result === 'passed' ? text.passed : row.result === 'empty_devices' ? text.empty : ['unconfigured','running','cancelled'].includes(row.result) ? text.unknown : text.failed + ' [' + row.result + ']');
-          for (const key of ['error_code','net_error','http_status','relay_endpoints','side0_error','side1_error'])
-            if (Number.isInteger(row[key]) && (row[key] || key === 'relay_endpoints')) line.textContent += ' · ' + key + '=' + row[key];
-          details.append(line);
-        }
-        li.append(details); $('diagnostics').append(li);
-      }
+  async function refreshServerStatus() {
+    if (!signedIn) return;
+    $('serverStatusButton').dataset.state = 'loading';
+    $('serverLoadStatus').textContent = serverChecked ? '' : text.remoteConnecting;
+    let state;
+    try { state = await api('account/status'); }
+    catch (error) {
+      $('serverStatusButton').dataset.state = 'warning';
+      $('serverDetails').hidden = true;
+      $('serverLoadStatus').textContent = text[error.message] || text.error;
+      if (['expired','already_open','device_revoked'].includes(error.message)) throw error;
+      return;
     }
+    serverChecked = true;
+    const unhealthy = Object.values(state.dependencies).some(probe => probe && !probe.ok);
+    $('serverStatusButton').dataset.state = unhealthy ? 'warning' : 'ready';
+    $('serverLoadStatus').textContent = '';
+    $('serverDetails').hidden = false;
+    const entries = [[text.revision,state.revision], [text.uptime,new Intl.NumberFormat(document.documentElement.lang, {style:'unit', unit:'minute', unitDisplay:'short'}).format(Math.floor(state.uptime / 60))],
+      [text.onlineDevices,state.online], [text.signalingSessions,state.sessions],
+      ['STUN',state.stun ? text.configured : text.unknown], ['TURN',state.turn.join(', ') || text.unknown]];
+    for (const key of ['https','google']) {
+      const probe = state.dependencies[key];
+      const title = key === 'https' ? 'HTTPS / TLS' : text.googleKeys;
+      entries.push([title,probe ? (probe.ok ? text.passed : text.failed) + ' · ' + when(probe.time) +
+        (probe.ok ? '' : ' · net=' + probe.net_error + ' HTTP=' + probe.http_status) : text.unknown]);
+      if (probe && probe.certificate_expiry) entries.push([title + ' · ' + text.certificateExpiry,when(probe.certificate_expiry)]);
+    }
+    detailList('serverStatus', entries);
+    $('diagnostics').replaceChildren();
+    if (!state.diagnostics.length) { const li = document.createElement('li'); li.textContent = text.empty; $('diagnostics').append(li); }
+    for (const report of state.diagnostics) {
+      const li = document.createElement('li'), details = document.createElement('div'); details.className = 'details';
+      const title = document.createElement('strong'); title.textContent = report.name + ' · ' + when(report.time); details.append(title);
+      for (const row of report.results) {
+        const line = document.createElement('small');
+        const stages = {cloud:'Cloud TLS',discovery:text.devicesTitle,ice_config:'ICE',stun:'STUN',turn_udp:'TURN UDP',turn_tcp:'TURN TCP',turn_tls:'TURN TLS'};
+        line.textContent = (stages[row.stage] || row.stage) + (Number.isInteger(row.probe) ? ' #' + (row.probe + 1) : '') + ': ' +
+          (row.result === 'passed' ? text.passed : row.result === 'empty_devices' ? text.empty : ['unconfigured','running','cancelled'].includes(row.result) ? text.unknown : text.failed + ' [' + row.result + ']');
+        for (const key of ['error_code','net_error','http_status','relay_endpoints','side0_error','side1_error'])
+          if (Number.isInteger(row[key]) && (row[key] || key === 'relay_endpoints')) line.textContent += ' · ' + key + '=' + row[key];
+        details.append(line);
+      }
+      li.append(details); $('diagnostics').append(li);
+    }
+  }
+  async function refreshPanels() {
+    if (signedIn && (!$('serverPanel').hidden || !serverChecked)) await refreshServerStatus();
     if ($('historyPanel').open) {
       const state = await api('account/history'); $('history').replaceChildren();
       if (!state.events.length) { const li = document.createElement('li'); li.textContent = text.empty; $('history').append(li); }
@@ -253,15 +308,18 @@
       const heading = document.createElement('div'); heading.className = 'device-heading';
       heading.append(label); details.append(heading);
       const info = [];
+      let avatarColumn;
       if (kind === 'device') {
         item.className = 'device-row';
+        item.classList.toggle('offline', !row.online);
+        avatarColumn = document.createElement('div'); avatarColumn.className = 'device-avatar-column';
         const image = document.createElement('img'); image.className = 'device-avatar';
         image.width = image.height = 36; image.alt = ''; image.decoding = 'async';
         const index = Number.isInteger(row.avatar) && row.avatar >= 0 && row.avatar <= 8 ? row.avatar : 0;
         const fallback = '/auth/avatars/' + index + '.png';
         image.src = fallback;
         image.onerror = () => { image.onerror = null; image.src = fallback; };
-        item.append(image); images.push({row, image});
+        avatarColumn.append(image); item.append(avatarColumn); images.push({row, image});
         if (row.current) {
           const badge = document.createElement('span'); badge.className = 'current-device';
           badge.textContent = text.currentDevice; heading.append(badge);
@@ -276,7 +334,7 @@
       for (const line of info) { const p = document.createElement('small'); p.textContent = line; details.append(p); }
       const actions = document.createElement('div'); actions.className = 'row-actions';
       const remove = document.createElement('button');
-      remove.textContent = kind === 'device' ? text.revoke : text.remove;
+      remove.textContent = kind === 'device' ? text.removeDevice : text.remove;
       remove.setAttribute('aria-label', remove.textContent + ': ' + name);
       const locked = kind === 'passkey' && rows.length === 1 && !googleLinked;
       remove.dataset.locked = String(locked); remove.disabled = locked;
@@ -287,10 +345,29 @@
       });
       if (kind === 'device') {
         if (!row.current) {
-          const connect = document.createElement('button'); connect.textContent = text.remoteBrowserAccess;
+          const connect = document.createElement('button'); connect.className = 'device-browser-access';
+          connect.type = 'button'; connect.title = row.online ? text.remoteBrowserAccess : text.offline;
+          connect.disabled = !row.online; connect.dataset.locked = String(!row.online);
           connect.setAttribute('aria-label', text.remoteBrowserAccess + ': ' + name);
-          connect.onclick = () => window.open('/auth/remote.html?device=' + encodeURIComponent(row.id), '_blank', 'noopener');
-          actions.append(connect);
+          const icon = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+          icon.setAttribute('viewBox', '0 0 256 256'); icon.setAttribute('aria-hidden', 'true'); icon.setAttribute('focusable', 'false');
+          // Chromium product_logo.svg geometry with Chrome's full-color palette.
+          for (const [d, fill] of [
+            ['M128 191.995c35.346 0 64-28.654 64-64 0-35.347-28.654-64-64-64-35.346 0-64 28.654-64 64 0 35.346 28.654 64 64 64Z', '#fff'],
+            ['M96.01 183.41a63.681 63.681 0 0 1-23.42-23.43l-.007.004-55.425-96a128.027 128.027 0 0 0 110.841 192.018l55.436-96.018a63.985 63.985 0 0 1-16.465 18.775 64.007 64.007 0 0 1-70.96 4.651Z', '#34A853'],
+            ['M191.991 127.984a63.683 63.683 0 0 1-8.581 31.996l.007.004-55.426 96a128.029 128.029 0 0 0 110.872-192H127.991a64 64 0 0 1 64 64Z', '#FBBC05'],
+            ['M128 180c28.719 0 52-23.281 52-52s-23.281-52-52-52-52 23.281-52 52 23.281 52 52 52Z', '#1A73E8'],
+            ['M95.99 72.59a63.684 63.684 0 0 1 32.001-8.566v-.008h110.851A128.035 128.035 0 0 0 127.991.026 128.028 128.028 0 0 0 17.13 63.999l55.436 96.018a64.003 64.003 0 0 1 4.65-70.961A64 64 0 0 1 95.991 72.59Z', '#EA4335'],
+          ]) {
+            const path = document.createElementNS('http://www.w3.org/2000/svg', 'path');
+            path.setAttribute('d', d); path.setAttribute('fill', fill); icon.append(path);
+          }
+          connect.append(icon);
+          connect.onclick = () => {
+            if (!row.online || connect.disabled) return;
+            window.open('/auth/remote.html?device=' + encodeURIComponent(row.id), '_blank', 'noopener');
+          };
+          avatarColumn.append(connect);
         }
         const edit = document.createElement('button'); edit.textContent = text.editDetails;
         edit.setAttribute('aria-label', text.editDetails + ': ' + name);
@@ -363,7 +440,9 @@
     }
     text = translations[language]; document.documentElement.lang = language; document.documentElement.dir = language === 'ar' ? 'rtl' : 'ltr';
     for (const id of ['intro','google','passkey','phoneAction','phone','registerPhone','registerHint','add','addPhone','addhint','nextStepTitle','nativeRestartHint','approve','warning','devicesTitle','keysTitle']) $(id).textContent = text[id];
-    for (const id of ['logout','restart','refresh']) $(id).textContent = text[id];
+    for (const id of ['logout','restart']) $(id).textContent = text[id];
+    $('serverStatusButton').title = text.serverTitle; $('serverStatusButton').setAttribute('aria-label', text.serverTitle);
+    $('refresh').title = text.refresh; $('refresh').setAttribute('aria-label', text.refresh);
     action('google', async () => { const result = await api('google/start'); const url = new URL(result.url); if (url.origin !== 'https://accounts.google.com') throw new Error('error'); location.assign(url.href); });
     action('passkey', () => passkey('get')); action('phoneAction', () => passkey('get', true));
     action('registerPhone', () => passkey('register', true));
@@ -394,7 +473,7 @@
         $('metadataDialog').close(); await refreshRecords(); say('saved');
       });
     };
-    for (const id of ['serverPanel','historyPanel']) $(id).ontoggle = () => {
+    for (const id of ['historyPanel']) $(id).ontoggle = () => {
       if ($(id).open && signedIn && !busy) run(refreshPanels);
     };
     action('restart', async () => {
@@ -405,8 +484,9 @@
     action('logout', async () => {
       await api('browser/logout'); clearAvatars(); recordsCache = null; $('devices').replaceChildren();
       signedIn = false; awaitingNative = false; csrf = ''; accountId = '';
+      resetServerStatus();
       if (!enrollmentFlow) flow = null;
-      $('account').hidden = true; $('login').hidden = true; $('device').hidden = true;
+      $('account').hidden = true; $('identity').hidden = true; $('logout').hidden = true; $('login').hidden = true; $('device').hidden = true;
       $('restart').hidden = enrollmentFlow; $('nativeRestartHint').hidden = !enrollmentFlow; say('signedOut');
       const url = new URL(location.href);
       if (!enrollmentFlow) url.searchParams.delete('flow');
@@ -429,5 +509,6 @@
       if (signedIn && !busy && !document.hidden && !$('account').contains(document.activeElement)) refreshQuietly(management ? refresh : refreshRecords);
     }, 15000);
   }
+  setupServerStatus();
   start().catch(failed);
 })();

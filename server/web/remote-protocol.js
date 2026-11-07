@@ -2,7 +2,7 @@
 export const hex = bytes => Array.from(new Uint8Array(bytes), b => b.toString(16).padStart(2, '0')).join('').toUpperCase();
 export const random = count => hex(crypto.getRandomValues(new Uint8Array(count)));
 const utf8 = new TextEncoder();
-const features = ['cursor', 'input_epoch', 'sequence', 'motion', 'video_resolution', 'video_visibility', 'codec_renegotiation'];
+const features = ['cursor', 'cursor_motion', 'input_epoch', 'sequence', 'motion', 'video_resolution', 'video_visibility', 'codec_renegotiation'];
 export class RemoteProtocol {
   constructor(relay, status, offer, stopped) {
     Object.assign(this, {relay, status, offer, stopped});

@@ -15,9 +15,16 @@ keys.Digit0 = 39; keys.Numpad0 = 98;
 for (let i = 1; i <= 12; i++) keys['F' + i] = 57 + i;
 const chords = {'ctrl-space':[224,44], 'ctrl-alt-delete':[224,226,76],
   'alt-tab':[226,43], escape:[41], super:[227]};
+// Cursor serials are uint64 strings; Number would lose ordering above 2^53.
+function cursorSerial(value) {
+  if (typeof value !== 'string' || !/^[0-9]{1,20}$/.test(value)) return null;
+  const serial = BigInt(value);
+  return serial <= 18446744073709551615n ? serial : null;
+}
 export class RemoteInput {
   constructor(video, canvas, send) {
     Object.assign(this, {video, canvas, send}); this.sequence = 0; this.enabled = false; this.epoch = '';
+    this.cursorSequence = 0n; this.shapeSequence = 0n; this.lastPointerSequence = 0n;
     this.events = new AbortController(); const opts = {signal:this.events.signal};
     video.addEventListener('keydown', e => this.key(e, true), opts);
     video.addEventListener('keyup', e => this.key(e, false), opts);
@@ -29,6 +36,7 @@ export class RemoteInput {
     video.addEventListener('pointerup', e => { this.pointer(e, false); e.preventDefault(); }, opts);
     video.addEventListener('pointermove', e => { if (this.enabled) this.pointer(e, false, true); }, opts);
     video.addEventListener('pointercancel', () => this.release(), opts);
+    video.addEventListener('pointerleave', () => { if (!video.hasPointerCapture?.(this.pointerId)) this.resetPrediction(); }, opts);
     video.addEventListener('blur', () => this.release(), opts);
     window.addEventListener('blur', () => this.release(), opts);
     document.addEventListener('visibilitychange', () => { if (document.hidden) this.release(); }, opts);
@@ -41,14 +49,40 @@ export class RemoteInput {
     this.observer = new ResizeObserver(() => this.drawCursor()); this.observer.observe(video);
     video.addEventListener('loadedmetadata', () => this.drawCursor(), opts);
   }
-  packet(value) { if (this.epoch) this.send({...value, epoch:this.epoch, sequence:String(++this.sequence)}); }
+  packet(value) {
+    if (!this.epoch) return 0n;
+    const sequence = String(++this.sequence);
+    this.send({...value, epoch:this.epoch, sequence});
+    return BigInt(sequence);
+  }
   configure(value, allowed) {
     if (this.epoch !== value.epoch || !value.input || value.paused || !allowed) this.release();
-    this.epoch = typeof value.epoch === 'string' ? value.epoch : '';
+    const epoch = typeof value.epoch === 'string' ? value.epoch : '';
+    if (epoch !== this.epoch) {
+      this.cursorSequence = this.shapeSequence = this.lastPointerSequence = 0n;
+      this.pendingCursor = this.cursorState = this.cursorImage = null;
+      this.resetPrediction();
+    }
+    this.epoch = epoch;
     this.enabled = !!this.epoch && !!value.input && !value.paused && allowed;
     this.sas = value.sas === true;
+    this.paused = value.paused === true;
+    if (!this.enabled || this.paused) this.resetPrediction();
+    this.drawCursor();
   }
-  release() { this.packet({kind:'release'}); }
+  release() { this.resetPrediction(); this.packet({kind:'release'}); }
+  resetPrediction() {
+    clearTimeout(this.predictionTimer); this.prediction = null; this.drawCursor();
+  }
+  settlePrediction() {
+    if (!this.prediction) return;
+    const acknowledged = cursorSerial(this.cursorState?.input_sequence);
+    if (acknowledged !== null && acknowledged < this.prediction.sequence &&
+        performance.now() - this.prediction.at < 1000) {
+      this.predictionTimer = setTimeout(() => this.settlePrediction(), 50); return;
+    }
+    this.resetPrediction();
+  }
   key(event, down) {
     if (!this.enabled || event.isComposing || !keys[event.code]) return;
     event.preventDefault(); this.packet({kind:'key', usb:0x70000 + keys[event.code], down});
@@ -69,14 +103,46 @@ export class RemoteInput {
   }
   pointer(event, down, motion = false) {
     if (!this.enabled) return;
-    const r = this.rect(); if (!r) return;
+    const r = this.rect(); if (!r || r.width <= 0 || r.height <= 0) return;
     const x = (event.clientX - r.left) / r.width, y = (event.clientY - r.top) / r.height;
-    if ((motion || down) && (x < 0 || x > 1 || y < 0 || y > 1)) return;
+    if ((motion || down) && (x < 0 || x > 1 || y < 0 || y > 1) && !this.video.hasPointerCapture(event.pointerId)) {
+      this.resetPrediction(); return;
+    }
     const button = motion ? 0 : [1, 2, 3][event.button]; if (button === undefined) return;
-    this.packet({kind:'pointer', x:Math.max(0, Math.min(1, x)), y:Math.max(0, Math.min(1, y)), button, down});
+    const px = Math.max(0, Math.min(1, x)), py = Math.max(0, Math.min(1, y));
+    this.pointerId = event.pointerId;
+    this.lastPointerSequence = this.packet({kind:'pointer', x:px, y:py, button, down});
+    if (this.cursorState?.enabled && this.cursorImage) {
+      this.prediction = {x:px, y:py, sequence:this.lastPointerSequence, at:performance.now()};
+      clearTimeout(this.predictionTimer);
+      this.predictionTimer = setTimeout(() => this.settlePrediction(), 250);
+      this.drawCursor();
+    }
   }
   cursor(m) {
+    if (this.closed || this.paused || (m.epoch !== undefined && m.epoch !== this.epoch)) return;
+    if (m.cursor_position_only || m.cursor_sequence !== undefined) {
+      const sequence = cursorSerial(m.cursor_sequence), shape = cursorSerial(m.cursor_shape_sequence);
+      if (sequence === null || shape === null || sequence <= this.cursorSequence || shape <= 0n || shape < this.shapeSequence) return;
+      if (m.cursor_position_only && (m.width !== undefined || m.pixels !== undefined)) return;
+      if (m.cursor_position_only && shape !== this.shapeSequence) {
+        if (!this.pendingCursor || sequence > cursorSerial(this.pendingCursor.cursor_sequence)) this.pendingCursor = m;
+        return;
+      }
+      this.cursorSequence = sequence; this.shapeSequence = shape;
+    }
+    this.applyCursor(m);
+    if (this.pendingCursor) {
+      const pending = this.pendingCursor; this.pendingCursor = null; this.cursor(pending);
+    }
+  }
+  applyCursor(m) {
     this.cursorState = m;
+    if (!m.enabled) this.resetPrediction();
+    const acknowledged = cursorSerial(m.input_sequence);
+    if (this.prediction && (acknowledged === null || acknowledged >= this.prediction.sequence) &&
+        Math.abs(this.prediction.x * Math.max(1, m.source_width - 1) - m.x) <= 2 &&
+        Math.abs(this.prediction.y * Math.max(1, m.source_height - 1) - m.y) <= 2) this.resetPrediction();
     if (Number.isInteger(m.width)) {
       this.cursorImage = null;
       if (m.width > 0 && m.width <= 128 && Number.isInteger(m.height) && m.height > 0 && m.height <= 128 &&
@@ -97,13 +163,40 @@ export class RemoteInput {
     this.drawCursor();
   }
   drawCursor() {
-    const r = this.rect(), m = this.cursorState; if (!r) return;
-    this.canvas.width = Math.ceil(r.box.width); this.canvas.height = Math.ceil(r.box.height);
-    if (!m?.enabled || !this.cursorImage || !Number.isFinite(m.x) || !Number.isFinite(m.y) ||
-        !(m.source_width > 0) || !(m.source_height > 0) || m.x < 0 || m.y < 0 || m.x >= m.source_width || m.y >= m.source_height) return;
-    const sx = r.width / m.source_width, sy = r.height / m.source_height;
-    this.canvas.getContext('2d').drawImage(this.cursorImage, r.left - r.box.left + (m.x - this.hotX) * sx,
-      r.top - r.box.top + (m.y - this.hotY) * sy, this.cursorImage.width * sx, this.cursorImage.height * sy);
+    if (this.closed || this.cursorFrame) return;
+    this.cursorFrame = requestAnimationFrame(() => { this.cursorFrame = 0; this.paintCursor(); });
   }
-  close() { this.release(); this.enabled = false; this.events.abort(); this.observer.disconnect(); this.canvas.width = this.canvas.width; }
+  paintCursor() {
+    const r = this.rect(), m = this.cursorState;
+    const ctx = this.canvas.getContext('2d');
+    if (!r) { ctx.clearRect(0, 0, this.canvas.width, this.canvas.height); this.cursorRect = null; return; }
+    const dpr = window.devicePixelRatio || 1;
+    const width = Math.ceil(r.box.width * dpr), height = Math.ceil(r.box.height * dpr);
+    if (this.canvas.width !== width || this.canvas.height !== height || this.cursorDpr !== dpr) {
+      this.canvas.width = width; this.canvas.height = height; this.cursorRect = null; this.cursorDpr = dpr;
+    }
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    // Reuse the backing canvas and only clear the previous cursor rectangle.
+    if (this.cursorRect) {
+      const old = this.cursorRect; ctx.clearRect(old.x - 2, old.y - 2, old.w + 4, old.h + 4);
+      this.cursorRect = null;
+    }
+    if (this.paused || !m?.enabled || !this.cursorImage || !Number.isFinite(m.x) || !Number.isFinite(m.y) ||
+        !(m.source_width > 0) || !(m.source_height > 0)) return;
+    const position = this.prediction && this.enabled ? {
+      x:this.prediction.x * Math.max(1, m.source_width - 1), y:this.prediction.y * Math.max(1, m.source_height - 1)} : m;
+    if (position.x < 0 || position.y < 0 || position.x >= m.source_width || position.y >= m.source_height) return;
+    const sx = r.width / m.source_width, sy = r.height / m.source_height;
+    const rect = {x:r.left - r.box.left + (position.x - this.hotX) * sx,
+      y:r.top - r.box.top + (position.y - this.hotY) * sy, w:this.cursorImage.width * sx, h:this.cursorImage.height * sy};
+    ctx.save(); ctx.beginPath(); ctx.rect(r.left - r.box.left, r.top - r.box.top, r.width, r.height); ctx.clip();
+    ctx.drawImage(this.cursorImage, rect.x, rect.y, rect.w, rect.h); ctx.restore();
+    this.cursorRect = rect;
+  }
+  close() {
+    this.release(); this.closed = true; this.enabled = false;
+    clearTimeout(this.predictionTimer); cancelAnimationFrame(this.cursorFrame);
+    this.pendingCursor = this.cursorState = this.cursorImage = null;
+    this.events.abort(); this.observer.disconnect(); this.canvas.width = this.canvas.width;
+  }
 }
